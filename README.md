@@ -1,5 +1,5 @@
 # nbdapi
-nbdapi is an open source python library that acts as a API wrapper for National Bank Dirtect Brokerage.
+nbdapi is an open source python library that acts as a API wrapper for National Bank Direct Brokerage.
 
 ## Installation
     pip install nbdapi
