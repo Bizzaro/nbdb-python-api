@@ -69,6 +69,8 @@ class NationalBank():
         session
             Cloudscraper session that is logged into National Bank Direct Brokerage
         """
+
+        print("test lib linking")
         login_url = 'https://orion-api.bnc.ca/sso-api/api/session'
         token_url = 'https://orion-api.bnc.ca/sso-api/api/access-token'
 
