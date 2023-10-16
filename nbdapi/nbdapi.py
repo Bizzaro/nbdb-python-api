@@ -1,6 +1,17 @@
-import cloudscraper
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
+import requests
+import json
+import time
+import uuid
+from browsermobproxy import Server
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+import undetected_chromedriver as uc
+from pprint import pformat
+
 
 class NationalBank():
     """
@@ -44,6 +55,7 @@ class NationalBank():
     get_positions(account_id)
         Returns info regarding the positions held in the specified account
     """
+
     def __init__(self, user, passw):
         """
         Parameters
@@ -59,40 +71,88 @@ class NationalBank():
         """
         self.user = user
         self.passw = passw
-        
+
         self.session = self.login()
 
-    def login(self):
-        """
-        Returns
-        -------
-        session
-            Cloudscraper session that is logged into National Bank Direct Brokerage
-        """
+    def capture_network_traffic(self, url, username, password):
+        driver = uc.Chrome(headless=False, enable_cdp_events=True)
 
-        print("test lib linking")
-        login_url = 'https://orion-api.bnc.ca/sso-api/api/session'
-        token_url = 'https://orion-api.bnc.ca/sso-api/api/access-token'
-
-        login_data = {
-            'userid': self.user,
-            'password': self.passw,
-            'siteCode': 'CEBN'
-        }
-
-        session = cloudscraper.CloudScraper()
-        session.headers.update({'Content-Type': 'application/json'})
         
-        response = session.post(url=login_url, json=login_data)
+        def mylousyprintfunction(eventdata):
+            if 'params' in eventdata and 'request' in eventdata['params'] and 'headers' in eventdata['params']['request']:
+                token = eventdata['params']['request']['headers'].get('Authorization')
 
-        if not response.ok:
-            raise Exception('Error! Unable To Log Into National Bank Direct Brokerage.') 
 
-        self.token = session.get(token_url).json()['data']['accessToken']
+        driver.add_cdp_listener('Network.requestWillBeSent', mylousyprintfunction)
 
-        session.headers.update({'Authorization': f'Bearer {self.token}'})
+        # Navigate to the provided URL
+        driver.get(url)
+        wait = WebDriverWait(driver, 10)  # waits up to 10 seconds
 
-        return session
+        # Interact with the login form and submit
+        wait.until(EC.presence_of_element_located((By.ID, 'username')))
+        try:
+            agree_button = driver.find_element(
+                By.ID, 'didomi-notice-agree-button')
+            agree_button.click()
+        except:
+            print("no agree button found")
+        username_field = driver.find_element(By.ID, "username")
+        password_field = driver.find_element(
+            By.ID, "password-hidden")  # As per your earlier mention
+        login_button = driver.find_element(
+            By.CSS_SELECTOR, 'button[type="submit"]')
+
+        username_field.send_keys(username)
+        password_field.send_keys(password)
+
+        # wait = WebDriverWait(driver, 300)  # waits up to 10 seconds
+        login_button.click()
+
+        link_element = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[data-test="choose-factor-type-sms"]'))
+        )
+        link_element.click()
+        user_input = input("Based on the website content, please enter the text you want to type: ")
+
+        # box
+        # id='validation-code'
+        boxcode = wait.until(EC.presence_of_element_located((By.ID, 'validation-code')))
+        boxcode.send_keys(user_input)
+
+        # submit button: 
+        # data-test=validation-code-submit-button
+    
+        submit_code = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'button[data-test="validation-code-submit-button"]'))
+        )
+        submit_code.click()
+
+        # aria-label="Refresh", a tag
+        refresh = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[aria-label="Refresh"]'))
+        )
+        # wait = WebDriverWait(driver, 10)  # waits up to 10 seconds
+        driver.get("https://client.bnc.ca/nbdb/history")
+    
+        time.sleep(3000)
+
+
+        driver.quit()
+
+        return network_data
+
+    def login(self):
+        URL = "https://client.bnc.ca/nbdb/login"
+
+        captured_requests = self.capture_network_traffic(
+            URL, self.user, self.passw)
+
+        for request in captured_requests:
+            print(request)
+
+        exit(1)
+        return ""
 
     def get_quote(self, ticker, market):
         """
@@ -113,7 +173,8 @@ class NationalBank():
 
         quote_url += to_add
 
-        response = self.session.get(quote_url).json()['data'][to_add]['finInstrumentPrice']
+        response = self.session.get(quote_url).json()[
+            'data'][to_add]['finInstrumentPrice']
 
         return_value = {
             'bid': response['bidPrice'],
@@ -139,7 +200,8 @@ class NationalBank():
         account_type = account_type.title()
 
         account_url = 'https://orion-api.bnc.ca/orion-api/v1/1/portfolios'
-        response = self.session.get(account_url).json()['data'][0]['accountList']
+        response = self.session.get(account_url).json()[
+            'data'][0]['accountList']
 
         for item in response:
             if currency_type in item['acctTypeDesc'] and account_type in item['acctTypeDesc']:
@@ -161,7 +223,8 @@ class NationalBank():
         """
         account_url = f'https://orion-api.bnc.ca/orion-api/v1/1/accounts/assetsDetail?acctNo={account_id}'
 
-        response = self.session.get(account_url).json()['data']['accountAssetDetailList'][0]
+        response = self.session.get(account_url).json()[
+            'data']['accountAssetDetailList'][0]
 
         currency = response['account']['acctCurrCd']
         balance = response['assetsDetailByCurrencyList'][currency]['cashAmt']
@@ -227,31 +290,32 @@ class NationalBank():
         validation_url = 'https://orion-api.bnc.ca/orion-api/v1/1/stock-orders/validation'
 
         validation_data = {
-            "stockOrder":{
-                "ordId":None,
-                "acctNo":account_id,
-                "operation":side,
-                "ordQty":qty,
-                "expiry":expiry,
-                "expiryDt":expiry_date,
-                "restriction":"NONE",
-                "phone":"000-000-0000",
-                "finInstrument":{
-                    "marketSymbol":{
-                        "symbolCd":symbol,
-                        "symbolCurrCd":currency,
-                        "symbolCntryCd":country
+            "stockOrder": {
+                "ordId": None,
+                "acctNo": account_id,
+                "operation": side,
+                "ordQty": qty,
+                "expiry": expiry,
+                "expiryDt": expiry_date,
+                "restriction": "NONE",
+                "phone": "000-000-0000",
+                "finInstrument": {
+                    "marketSymbol": {
+                        "symbolCd": symbol,
+                        "symbolCurrCd": currency,
+                        "symbolCntryCd": country
                     },
-                    "finInstrumentTypeCd":"STOCK"
+                    "finInstrumentTypeCd": "STOCK"
                 },
-                "limitPrice":limit_price,
-                "priceType":type,
-                "stopLimitPrice":None
+                "limitPrice": limit_price,
+                "priceType": type,
+                "stopLimitPrice": None
             },
-            "mode":"INSERT"
-            }
+            "mode": "INSERT"
+        }
 
-        response = self.session.post(url = validation_url, json=validation_data).json()
+        response = self.session.post(
+            url=validation_url, json=validation_data).json()
 
         order_data = {'stockOrder': response['data']['stockOrder']}
 
@@ -261,16 +325,16 @@ class NationalBank():
 
             for item in response['messageList']:
                 if 'your order will be processed by one of our representatives' in item['message']:
-                    raise Exception('An Error Has Occured When Attempting to process your order.')
+                    raise Exception(
+                        'An Error Has Occured When Attempting to process your order.')
                 else:
                     warning_list.append(item['msgId'])
 
             order_data['warnsNoList'] = warning_list
 
         order_data['stockOrder']['phone'] = phone
-        
-        return order_data
 
+        return order_data
 
     def place_market_order(self, symbol, account_id, currency, side, qty, phone):
         """
@@ -294,13 +358,15 @@ class NationalBank():
         dict
             Containing order ID
         """
-        order_data = self.validate(account_id, side, qty, symbol, currency, phone)
+        order_data = self.validate(
+            account_id, side, qty, symbol, currency, phone)
 
         order_url = 'https://orion-api.bnc.ca/orion-api/v1/1/stock-orders'
 
-        response = self.session.post(url=order_url, json=order_data).json()['data']
+        response = self.session.post(
+            url=order_url, json=order_data).json()['data']
 
-        return {'order_id' : response['stockOrder']['ordId']}
+        return {'order_id': response['stockOrder']['ordId']}
 
     def place_limit_order(self, symbol, account_id, currency, side, qty, phone, limit_price, days_till_expiration=0):
         """
@@ -328,14 +394,15 @@ class NationalBank():
         dict
             Containing order ID
         """
-        order_data = self.validate(account_id, side, qty, symbol, currency, phone, limit_price, days_till_expiration)
+        order_data = self.validate(
+            account_id, side, qty, symbol, currency, phone, limit_price, days_till_expiration)
 
         order_url = 'https://orion-api.bnc.ca/orion-api/v1/1/stock-orders'
 
-        response = self.session.post(url=order_url, json=order_data).json()['data']
+        response = self.session.post(
+            url=order_url, json=order_data).json()['data']
 
-        return {'order_id' : response['stockOrder']['ordId']}
-
+        return {'order_id': response['stockOrder']['ordId']}
 
     def cancel_order(self, order_id):
         """
@@ -373,7 +440,7 @@ class NationalBank():
         else:
             order_info = order_info[0]
 
-        return_dict ={
+        return_dict = {
             'order_id': order_info['ordId'],
             'operation': order_info['operation'],
             'order_quantity': order_info['ordQty'],
@@ -412,7 +479,7 @@ class NationalBank():
         if len(order_info) == 0:
             raise Exception('Order not Found.')
 
-        return_dict ={
+        return_dict = {
             'order_id': order_info['ordId'],
             'operation': order_info['operation'],
             'order_quantity': order_info['ordQty'],
@@ -471,7 +538,8 @@ class NationalBank():
 
         pos_url = f'https://orion-api.bnc.ca/orion-api/v1/1/accounts/assetsDetail?acctNo={account_id}'
 
-        response = self.session.get(pos_url).json()['data']['accountAssetDetailList'][0]
+        response = self.session.get(pos_url).json()[
+            'data']['accountAssetDetailList'][0]
         currency = response['account']['acctCurrCd']
         pos_list = response['assetsDetailByCurrencyList'][currency]['positionList']
 
@@ -486,7 +554,7 @@ class NationalBank():
                 'cost': eval['avgCostPrice'],
                 'change': eval['pnlAmt'],
                 'change_per': eval['pnlPerc'],
-                'market_val': eval['marketValueAmt']    
+                'market_val': eval['marketValueAmt']
             }
 
         return return_dict
