@@ -1,11 +1,13 @@
-# nbdapi
-nbdapi is an open source python library that acts as a API wrapper for National Bank Direct Brokerage.
+# nbdb-python-api [post Akamai - VERY WIP]
+> This is currently broken since NBDB upgraded to CIAM and everything is now behind Akamai Bot Defender. This fork aims to get it working with the new setup.
+
+nbdb-python-api is an open source python library that acts as a API wrapper for National Bank Direct Brokerage.
 
 ## Installation
-    pip install nbdapi
+TBD
 
-## Functions
-nbdapi can be used to place both limit and market orders, cancel orders, retrieve account balance, order information, position information (including unrealized gains and losses), real-time quotes and more.
+## Features
+TBD
 
 ## Example Usage
 ```python
