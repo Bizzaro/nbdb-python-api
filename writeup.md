@@ -6,3 +6,7 @@ took 12 hours to figure this out
 - tried reverse-engineering the login flow but it is heavily protected via akamai for the login
 - for the API routes, there is extra security, not only authorization header but also X-External-User-Context-Token, luckily this one has a longer expiry
 - 
+
+crude-attempt at reversing the cookie flow... 
+https://www.zenrows.com/blog/bypass-akamai
+![Alt text](nbdb-login-flow.drawio.png)

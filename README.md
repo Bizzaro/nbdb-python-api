@@ -10,6 +10,8 @@ TBD
 TBD
 
 ## Example Usage
+
+> Outdated
 ```python
 from nbdapi import NationalBank
 
