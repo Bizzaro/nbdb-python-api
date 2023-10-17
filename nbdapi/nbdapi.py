@@ -1,18 +1,17 @@
-from datetime import datetime, timedelta
 import requests
-import json
 import time
-import uuid
-from selenium import webdriver
+import random
+import queue
+import undetected_chromedriver as uc
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
-import undetected_chromedriver as uc
-from pprint import pformat
 from selenium.webdriver.common.action_chains import ActionChains
 
-import random
+from datetime import datetime, timedelta
+from threading import Thread
+
 
 class NationalBank():
     """
@@ -73,9 +72,9 @@ class NationalBank():
         self.user = user
         self.passw = passw
         # 5 min expiry, 300 seconds
-        self.NBDB_AUTH_TOKEN = None
+        self.NBDB_AUTH_TOKEN_QUEUE = queue.LifoQueue()
         # 6000 second expiry
-        self.AKAMAI_COOKIE_TOKEN = None
+        self.AKAMAI_COOKIE_TOKEN_QUEUE = queue.LifoQueue()
         self.session = self.login()
 
     def findTokenCallback(self, eventdata):
@@ -83,7 +82,9 @@ class NationalBank():
             headers = eventdata['params']['request']['headers']
             token = headers.get('Authorization')
             if (token):
-                self.NBDB_AUTH_TOKEN = token
+                while not self.NBDB_AUTH_TOKEN_QUEUE.empty():
+                    self.NBDB_AUTH_TOKEN_QUEUE.get()  # remove old value
+                self.NBDB_AUTH_TOKEN_QUEUE.put(token)
 
     def get_tokens_selenium(self, loginPageURL, username, password):
         driver = uc.Chrome(headless=False, enable_cdp_events=True)
@@ -163,11 +164,10 @@ class NationalBank():
             cookies = driver.execute_cdp_cmd("Network.getAllCookies", {})
             for cookie in cookies['cookies']:
                 if (cookie['name'] == "X-External-User-Context-Token"):
-                    self.AKAMAI_COOKIE_TOKEN = cookie['value']
+                    while not self.AKAMAI_COOKIE_TOKEN_QUEUE.empty():
+                        self.AKAMAI_COOKIE_TOKEN_QUEUE.get()  # remove old value
+                    self.AKAMAI_COOKIE_TOKEN_QUEUE.put(cookie['value'])
 
-            print(self.AKAMAI_COOKIE_TOKEN)
-            print(self.NBDB_AUTH_TOKEN)
-            print("--------------")
             # write code to sleep for a random amount of seconds between 2 and 30 seconds
             time.sleep(random.randint(2, 30))
 
@@ -186,23 +186,25 @@ class NationalBank():
         response = requests.get(
             loginPageURL, headers=headers, cookies=cookies_object)
 
-    def consumer_function():
+    def consumer_function(self):
         while True:
             # Get data from the queue and process it
-            title = data_queue.get()  # This will block until there's data in the queue
-            print(f"Processing title: {title}")
+            akamai_cookie = self.AKAMAI_COOKIE_TOKEN_QUEUE.get()
+            nbdb_token = self.NBDB_AUTH_TOKEN_QUEUE.get()
+            print(akamai_cookie)
+            print(nbdb_token)
+            print("--------------")
 
     def login(self):
         URL = "https://client.bnc.ca/nbdb/login"
+        selenium_thread = Thread(target=self.get_tokens_selenium, args=(URL, self.user, self.passw)) # URL and interval of 10 minutes
+        consumer_thread = Thread(target=self.consumer_function)
 
-        captured_requests = self.get_tokens_selenium(
-            URL, self.user, self.passw)
+        selenium_thread.start()
+        consumer_thread.start()
 
-        for request in captured_requests:
-            print(request)
-
-        exit(1)
-        return ""
+        selenium_thread.join()
+        consumer_thread.join()
 
     def get_quote(self, ticker, market):
         """
