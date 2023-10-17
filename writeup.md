@@ -9,4 +9,5 @@ took 12 hours to figure this out
 
 crude-attempt at reversing the cookie flow... 
 https://www.zenrows.com/blog/bypass-akamai
-![Alt text](nbdb-login-flow.drawio.png)
+
+![Alt text](image-1.png)

@@ -1,6 +1,6 @@
-source /home/albert/private_git/nbdb-poc/venv/bin/activate
+python -m venv venv
+source ./test/venv/Scripts/activate
 pip install -e .
 
-cd /home/albert/private_git/nbdb-poc/
+cd ./test
 python test.py
-

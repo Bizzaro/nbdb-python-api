@@ -3,7 +3,6 @@ import requests
 import json
 import time
 import uuid
-from browsermobproxy import Server
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,7 +10,9 @@ from selenium.webdriver.support import expected_conditions as EC
 
 import undetected_chromedriver as uc
 from pprint import pformat
+from selenium.webdriver.common.action_chains import ActionChains
 
+import random
 
 class NationalBank():
     """
@@ -71,81 +72,130 @@ class NationalBank():
         """
         self.user = user
         self.passw = passw
-
+        # 5 min expiry, 300 seconds
+        self.NBDB_AUTH_TOKEN = None
+        # 6000 second expiry
+        self.AKAMAI_COOKIE_TOKEN = None
         self.session = self.login()
 
-    def capture_network_traffic(self, url, username, password):
+    def findTokenCallback(self, eventdata):
+        if 'params' in eventdata and 'request' in eventdata['params'] and 'headers' in eventdata['params']['request']:
+            headers = eventdata['params']['request']['headers']
+            token = headers.get('Authorization')
+            if (token):
+                self.NBDB_AUTH_TOKEN = token
+
+    def get_tokens_selenium(self, loginPageURL, username, password):
         driver = uc.Chrome(headless=False, enable_cdp_events=True)
+        driver.set_window_size(1600, 900)
+        # Listen to the HTTP requests for the bearer token
+        driver.add_cdp_listener(
+            'Network.requestWillBeSent', self.findTokenCallback)
 
-        
-        def mylousyprintfunction(eventdata):
-            if 'params' in eventdata and 'request' in eventdata['params'] and 'headers' in eventdata['params']['request']:
-                token = eventdata['params']['request']['headers'].get('Authorization')
-
-
-        driver.add_cdp_listener('Network.requestWillBeSent', mylousyprintfunction)
+        _WAIT_TIMEOUT = WebDriverWait(driver, 30)
 
         # Navigate to the provided URL
-        driver.get(url)
-        wait = WebDriverWait(driver, 10)  # waits up to 10 seconds
+        driver.get(loginPageURL)
 
-        # Interact with the login form and submit
-        wait.until(EC.presence_of_element_located((By.ID, 'username')))
+        # Wait for username ID element to load
+        _WAIT_TIMEOUT.until(
+            EC.presence_of_element_located((By.ID, 'username')))
+
+        # Finds the accept cookies popup and accepts it if it exists
         try:
             agree_button = driver.find_element(
                 By.ID, 'didomi-notice-agree-button')
             agree_button.click()
         except:
             print("no agree button found")
-        username_field = driver.find_element(By.ID, "username")
-        password_field = driver.find_element(
-            By.ID, "password-hidden")  # As per your earlier mention
+
+        # Find login elements
+        username_text_box = driver.find_element(By.ID, "username")
+        password_text_box = driver.find_element(By.ID, "password-hidden")
         login_button = driver.find_element(
             By.CSS_SELECTOR, 'button[type="submit"]')
 
-        username_field.send_keys(username)
-        password_field.send_keys(password)
-
-        # wait = WebDriverWait(driver, 300)  # waits up to 10 seconds
+        # Login to NBDB
+        username_text_box.send_keys(username)
+        password_text_box.send_keys(password)
         login_button.click()
 
-        link_element = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[data-test="choose-factor-type-sms"]'))
-        )
-        link_element.click()
-        user_input = input("Based on the website content, please enter the text you want to type: ")
+        # Handle 2FA
+        sms_2fa_a_tag = _WAIT_TIMEOUT.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, 'a[data-test="choose-factor-type-sms"]')))
+        sms_2fa_a_tag.click()
 
-        # box
-        # id='validation-code'
-        boxcode = wait.until(EC.presence_of_element_located((By.ID, 'validation-code')))
-        boxcode.send_keys(user_input)
+        user_sms_code = input(
+            "Enter the 6 digit code sent to your phone:")
 
-        # submit button: 
-        # data-test=validation-code-submit-button
-    
-        submit_code = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'button[data-test="validation-code-submit-button"]'))
-        )
-        submit_code.click()
+        # Enter SMS code
+        boxcode = _WAIT_TIMEOUT.until(EC.presence_of_element_located(
+            (By.ID, 'validation-code')))
+        boxcode.send_keys(user_sms_code)
 
-        # aria-label="Refresh", a tag
-        refresh = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, 'a[aria-label="Refresh"]'))
+        # Submit SMS code
+        submit_2fa_code_button = _WAIT_TIMEOUT.until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, 'button[data-test="validation-code-submit-button"]'))
         )
-        # wait = WebDriverWait(driver, 10)  # waits up to 10 seconds
+        submit_2fa_code_button.click()
+
+        # Wait until the refresh button appears, then we know we are logged in
+        _WAIT_TIMEOUT.until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, 'a[aria-label="Refresh"]'))
+        )
+
+        # Load the history page
         driver.get("https://client.bnc.ca/nbdb/history")
-    
-        time.sleep(3000)
 
+        # Wait for the refresh button to appear
+        refresh_button = _WAIT_TIMEOUT.until(EC.presence_of_element_located(
+            (By.CSS_SELECTOR, 'a[aria-label="Refresh"]')))
+        refresh_element_overlay_bypass = ActionChains(driver)
+        refresh_element_overlay_bypass.move_to_element(refresh_button)
 
-        driver.quit()
+        while True:
+            # Click the refresh button
+            refresh_element_overlay_bypass.click().perform()
 
-        return network_data
+            # Capture all the new request cookies
+            cookies = driver.execute_cdp_cmd("Network.getAllCookies", {})
+            for cookie in cookies['cookies']:
+                if (cookie['name'] == "X-External-User-Context-Token"):
+                    self.AKAMAI_COOKIE_TOKEN = cookie['value']
+
+            print(self.AKAMAI_COOKIE_TOKEN)
+            print(self.NBDB_AUTH_TOKEN)
+            print("--------------")
+            # write code to sleep for a random amount of seconds between 2 and 30 seconds
+            time.sleep(random.randint(2, 30))
+
+        # Consuming the tokens
+        cookies_object = {
+            "X-External-User-Context-Token": self.AKAMAI_COOKIE_TOKEN
+        }
+
+        headers = {
+            "Authorization": self.NBDB_AUTH_TOKEN,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+            "Accept": "application/json, text/plain, */*"
+        }
+
+        loginPageURL = "https://orion-api.bnc.ca/orion-api/v1/1/accounts/history?acctNo=669RH9S&acctNo=669RH97&acctNo=669RH9W&period=TWO_YEARS"
+        response = requests.get(
+            loginPageURL, headers=headers, cookies=cookies_object)
+
+    def consumer_function():
+        while True:
+            # Get data from the queue and process it
+            title = data_queue.get()  # This will block until there's data in the queue
+            print(f"Processing title: {title}")
 
     def login(self):
         URL = "https://client.bnc.ca/nbdb/login"
 
-        captured_requests = self.capture_network_traffic(
+        captured_requests = self.get_tokens_selenium(
             URL, self.user, self.passw)
 
         for request in captured_requests:
