@@ -12,6 +12,82 @@ from selenium.webdriver.common.action_chains import ActionChains
 from datetime import datetime, timedelta
 from threading import Thread
 
+import os
+from dotenv import load_dotenv
+
+# email reader
+import imaplib
+import email
+import re
+import queue
+
+
+class EmailHandler:
+
+    def __init__(self, email, password, shared_queue, server, sender, inboxName):
+        self.email = email
+        self.password = password
+        self.server = server
+        self.sender = sender
+        self.queue = queue.Queue()
+        self.inboxName = inboxName
+        self.shared_queue = shared_queue
+
+    def fetch_2fa_code(self):
+        # Connect to the email server and login
+
+        found = False
+
+        while (not found):
+            mail = imaplib.IMAP4_SSL(self.server)
+            print(self.email)
+            mail.login(self.email, self.password)
+
+            # Select the inbox (or another folder)
+            mail.select(self.inboxName)
+
+            # Search for unread emails from the specified sender
+            status, email_ids = mail.search(
+                None, f'(UNSEEN FROM "{self.sender}")')
+            email_ids = email_ids[0].split()
+
+            # Loop through the emails and extract 2FA codes
+            for e_id in email_ids:
+                # Fetch the email body
+                status, msg_data = mail.fetch(e_id, '(RFC822)')
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+
+                        email_body = None
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_type() == "text/plain":
+                                    email_body = part.get_payload(decode=True)
+                                    break
+                        else:
+                            email_body = msg.get_payload(decode=True)
+
+                        if email_body:
+                            try:
+                                decoded_body = email_body.decode('us-ascii')
+
+                                # Use regex to extract the 2FA code
+                                match = re.search(r'(\d{6})', decoded_body)
+                                if match:
+                                    code = match.group(1)
+                                    self.shared_queue.put(code)
+                                    print(code)
+                                    found = True
+                                    # Mark the email as read
+                                    mail.store(e_id, '+FLAGS', '\\Seen')
+                            except Exception as e:
+                                print(f"Error processing email: {e}")
+            print("sleeping for 5 seconds")
+            time.sleep(5)
+        # Logout and close the connection
+        mail.logout()
+
 
 class NationalBank():
     """
@@ -86,7 +162,7 @@ class NationalBank():
                     self.NBDB_AUTH_TOKEN_QUEUE.get()  # remove old value
                 self.NBDB_AUTH_TOKEN_QUEUE.put(token)
 
-    def get_tokens_selenium(self, loginPageURL, username, password):
+    def get_tokens_selenium(self, loginPageURL, username, password, shared_queue):
         driver = uc.Chrome(headless=False, enable_cdp_events=True)
         driver.set_window_size(1600, 900)
         # Listen to the HTTP requests for the bearer token
@@ -121,18 +197,13 @@ class NationalBank():
         password_text_box.send_keys(password)
         login_button.click()
 
-        # Handle 2FA
-        sms_2fa_a_tag = _WAIT_TIMEOUT.until(EC.presence_of_element_located(
-            (By.CSS_SELECTOR, 'a[data-test="choose-factor-type-sms"]')))
-        sms_2fa_a_tag.click()
+        # get 2FA code from shared queue with other thread that polls the email inbox
+        user_2fa_code = shared_queue.get()
 
-        user_sms_code = input(
-            "Enter the 6 digit code sent to your phone:")
-
-        # Enter SMS code
+        # handle email 2FA
         boxcode = _WAIT_TIMEOUT.until(EC.presence_of_element_located(
             (By.ID, 'validation-code')))
-        boxcode.send_keys(user_sms_code)
+        boxcode.send_keys(user_2fa_code)
 
         # Submit SMS code
         submit_2fa_code_button = _WAIT_TIMEOUT.until(
@@ -191,20 +262,33 @@ class NationalBank():
             # Get data from the queue and process it
             akamai_cookie = self.AKAMAI_COOKIE_TOKEN_QUEUE.get()
             nbdb_token = self.NBDB_AUTH_TOKEN_QUEUE.get()
-            print(akamai_cookie)
-            print(nbdb_token)
+
+            print(
+                f'{datetime.today().strftime("%Y-%m-%d %H:%M:%S")} akamai: {akamai_cookie}')
+            print(
+                f'{datetime.today().strftime("%Y-%m-%d %H:%M:%S")} nbdb: {nbdb_token}')
             print("--------------")
 
     def login(self):
         URL = "https://client.bnc.ca/nbdb/login"
-        selenium_thread = Thread(target=self.get_tokens_selenium, args=(URL, self.user, self.passw)) # URL and interval of 10 minutes
+
+        load_dotenv()
+        shared_queue = queue.Queue()
+        email_handler = EmailHandler(os.getenv('EMAIL_USERNAME'), os.getenv(
+            'EMAIL_PASSWORD'), shared_queue, os.getenv('EMAIL_SERVER'), 'noreply@appbnc.ca', os.getenv('EMAIL_INBOX_NAME'))
+
+        selenium_thread = Thread(target=self.get_tokens_selenium, args=(
+            URL, self.user, self.passw, shared_queue))  # URL and interval of 10 minutes
         consumer_thread = Thread(target=self.consumer_function)
+        mailbox_thread = Thread(target=email_handler.fetch_2fa_code)
 
         selenium_thread.start()
         consumer_thread.start()
+        mailbox_thread.start()
 
         selenium_thread.join()
         consumer_thread.join()
+        mailbox_thread.join()
 
     def get_quote(self, ticker, market):
         """
